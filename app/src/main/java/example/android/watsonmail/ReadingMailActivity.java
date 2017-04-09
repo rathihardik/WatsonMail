@@ -11,15 +11,35 @@ import android.speech.tts.TextToSpeech;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.View;
+import android.webkit.MimeTypeMap;
 import android.widget.Toast;
 
 import com.ibm.watson.developer_cloud.android.library.audio.StreamPlayer;
+import com.ibm.watson.developer_cloud.document_conversion.v1.DocumentConversion;
 import com.ibm.watson.developer_cloud.text_to_speech.v1.model.Voice;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.VisualRecognition;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.ClassifyImagesOptions;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.DetectedFaces;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.Face;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.ImageClassification;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.ImageFace;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.ImageText;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.RecognizedText;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.VisualClassification;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.VisualClassifier;
+import com.ibm.watson.developer_cloud.visual_recognition.v3.model.VisualRecognitionOptions;
 
+import org.apache.commons.lang3.StringUtils;
 import org.jsoup.Jsoup;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -30,6 +50,8 @@ import javax.mail.BodyPart;
 import javax.mail.Folder;
 import javax.mail.Message;
 import javax.mail.MessagingException;
+import javax.mail.Multipart;
+import javax.mail.Part;
 import javax.mail.PasswordAuthentication;
 import javax.mail.Session;
 import javax.mail.Store;
@@ -45,11 +67,15 @@ public class ReadingMailActivity extends AppCompatActivity {
     String TAG = "ReadingMailActivity";
     StreamPlayer streamPlayer;
     private ProgressDialog progressDialog;
+    String textinMail="", FaceInMail="",attributesinMail = "", documentConversion= "";
+    boolean isImage = false, isDoc = false;
     public static com.ibm.watson.developer_cloud.text_to_speech.v1.TextToSpeech mainService;
+
     public static Message[] messagefinal;
     public static boolean readingIndividualMails = false;
     public static boolean isAttachment = false;
-    public static boolean wantToAnalayzeAttachment = false;
+    public boolean wantToAnalayzeAttachment = false;
+    public static boolean isWaiting = false;
     String mailRecipient="",mailMessage = "",mailSubject="";
     static List<File> attachments;
 
@@ -126,12 +152,16 @@ public class ReadingMailActivity extends AppCompatActivity {
     public void layoutClicked(View view)
     {
         Log.e(TAG,"Layout is Clicked");
+        while (streamQueue.isEmpty()!=true)
+        {
+            StreamPlayer sm = streamQueue.poll();
+            sm.interrupt();
+        }
         while(taskQueue.isEmpty()!=true)
         {
             AsyncTask s = taskQueue.poll();
             s.cancel(true);
-            StreamPlayer sm = streamQueue.poll();
-            sm.interrupt();;
+
         }
         listen();
     }
@@ -178,34 +208,115 @@ public class ReadingMailActivity extends AppCompatActivity {
         }
     }
 
-    public static String getTextFromMessage(Message message) throws Exception {
+    public static String parseMultiPart(MimeMultipart p)
+    {
+        String res="";
+        try {
+            int count=p.getCount();
+            for(int i=0;i<count;i++)
+            {
+                BodyPart bodyPart=p.getBodyPart(i);
+                if(!Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition()) &&
+                        !(StringUtils.isNotBlank(bodyPart.getFileName()))) {
+                    if (bodyPart.isMimeType("text/plain")){
+                        res = res + " " + bodyPart.getContent();
+                        break;
+                    } else if (bodyPart.isMimeType("text/html") || bodyPart.isMimeType("text/javascript")){
 
-        attachments.clear();
+                        String html =(String) bodyPart.getContent();
+                        res = res + " " + Jsoup.parse(html).text();
+
+                    }
+                    else if(bodyPart.isMimeType("image/jpeg"))
+                    {
+                        res+="mail contains image";
+                    }
+                    else if(bodyPart.isMimeType("multipart/*"))
+                    {
+                        MimeMultipart mp=(MimeMultipart)bodyPart.getContent();
+                        res=res+" "+parseMultiPart(mp);
+                    }
+                    continue;
+                }
+            }
+        } catch (MessagingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return res;
+    }
+
+    public static String getTextFromMessage(Message message) throws Exception {
         if (message.isMimeType("text/plain")){
+            if(message.getContentType().contains("image/"))
+            {
+
+            }
             return message.getContent().toString();
         }
-        else if (message.isMimeType("multipart/*"))
+        else if(message.isMimeType("text/html"))
         {
+            if(message.getContentType().contains("image/"))
+            {
+
+            }
+
+            String html =(String) message.getContent();
+            org.jsoup.nodes.Document doc=Jsoup.parse(html);
+            doc.select("a").remove();
+            html=doc.body().children().toString();
+
+            return " " + Jsoup.parse(html).text();
+
+        }
+
+        else if (message.isMimeType("multipart/*") || message.isMimeType("multipart/report"))
+        {
+
             String result = "";
             MimeMultipart mimeMultipart = (MimeMultipart)message.getContent();
             int count = mimeMultipart.getCount();
+
             for (int i = 0; i < count; i ++){
                 BodyPart bodyPart = mimeMultipart.getBodyPart(i);
-                if (bodyPart.isMimeType("text/plain"))
-                {
-                    result = result + bodyPart.getContent();
-                    break;
-                } else if (bodyPart.isMimeType("text/html") || bodyPart.isMimeType("text/javascript"))
-                {
-                    String html = (String) bodyPart.getContent();
-                    result = result + Jsoup.parseBodyFragment(html).text();
-                }
-            }
+                if(!Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition()) &&
+                        !(StringUtils.isNotBlank(bodyPart.getFileName()))) {
 
-            /*Check if there is attachment and corresspondingly make isAttachment = true / false */
+                    if (bodyPart.isMimeType("text/plain")){
+
+                        if(message.getContentType().contains("image/"))
+                        {
+
+                        }
+                        result = result + " " + bodyPart.getContent();
+                        break;
+                    } else if (bodyPart.isMimeType("text/html") || bodyPart.isMimeType("text/javascript")){
+
+                        String html =(String) bodyPart.getContent();
+                        result = result + " " + Jsoup.parseBodyFragment(html).text();
+                    }
+                    else if(bodyPart.isMimeType("multipart/*"))
+                    {
+                        result=result+" "+parseMultiPart((MimeMultipart)bodyPart.getContent());
+                    }
+                    else if(bodyPart.isMimeType("image/jpeg"))
+                    {
+                        result="mail contains image";
+                    }
+                    continue;
+                }
+                isAttachment = true;
+            }
+            if(result=="")
+            {
+                result="Unrecognizd format";
+            }
             return result;
         }
-        return "";
+        return  "mail is empty";
     }
 
 
@@ -245,6 +356,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                 varSpeak.execute("The complete mail has been read. Kindly Select what you want to do");
                 taskQueue.add(varSpeak);
             }
+
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -328,6 +440,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                 }
                 else if(isAttachment==true && readingIndividualMails==true)
                 {
+                    flag=1;
                     if(wantToAnalayzeAttachment!=true)
                     {
                         Log.e(TAG,"isAttachment = true and wantToAnalyze==false");
@@ -343,6 +456,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                             varSpeak.execute("The attachment will not be downloaded. Please carry on");
                             taskQueue.add(varSpeak);
                             wantToAnalayzeAttachment = false;
+                            isAttachment = false;
                         }
                         else
                         {
@@ -352,14 +466,75 @@ public class ReadingMailActivity extends AppCompatActivity {
                             wantToAnalayzeAttachment = false;
                         }
                     }
-                    if(wantToAnalayzeAttachment==true)
-                    {
+                    if(wantToAnalayzeAttachment==true) {
+                        Log.e(TAG, "Wanttoanalyze = true");
                         //Code to download the attachment.
                         //if the file is .jpg or .png then use vision recognition and speak
                         //else if the file is .html, .pdf, .docx then use document converterand read
                         //else say Unsupported format. sorry
-                    }
+                        new FileWrite().execute();
+                        while(isWaiting!=true)
+                        {
+                            //Log.e("value",Boolean.toString(isWaiting));
+                        }
+                        Log.e("werui","wedfghsdfghjkl");
+                        wantToAnalayzeAttachment = false;
+                        isAttachment = false;
+                        if(isImage){
+                            if(textinMail.equals(""))
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute("No Text in Image");
+                                taskQueue.add(varSpeak);
+                            }
+                            else
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute(textinMail);
+                                taskQueue.add(varSpeak);
+                            }
 
+                            if(FaceInMail.equals(""))
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute(" No face in image");
+                                taskQueue.add(varSpeak);
+                            }
+                            else
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute(FaceInMail);
+                                taskQueue.add(varSpeak);
+                            }
+
+                            if(attributesinMail.equals(""))
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute("No attributes present");
+                                taskQueue.add(varSpeak);
+                            }
+                            else
+                            {
+                                varSpeak = new Speak();
+                                varSpeak.execute(attributesinMail);
+                                taskQueue.add(varSpeak);
+                            }
+
+                        }
+                        else if(isDoc)
+                        {
+                            Log.e("mai hu idhar","doc file hai");
+                            varSpeak = new Speak();
+                            varSpeak.execute(documentConversion);
+                            taskQueue.add(varSpeak);
+                        }
+                        else
+                        {
+                            varSpeak = new Speak();
+                            varSpeak.execute("Sorry, I am not able to recognize the format of attachemnt");
+                            taskQueue.add(varSpeak);
+                        }
+                    }
 
                 }
                 else
@@ -445,7 +620,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                         }
 
                     }
-                    else if(status.toLowerCase().contains("previous page "))
+                    else if(status.toLowerCase().contains("previous page"))
                     {
                         readingIndividualMails = false;
                         flag=1;
@@ -468,7 +643,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                         this.no = 1;
                         readMailIndividual(1);
                     }
-                    else if(status.toLowerCase().contains("second") || status.toLowerCase().contains("2") || status.toLowerCase().equals("to") )
+                    else if(status.toLowerCase().contains("second") || status.toLowerCase().contains("2") || status.toLowerCase().equals("to") || status.toLowerCase().equals("too") )
                     {
                         flag=1;
                         this.no = 2;
@@ -577,6 +752,7 @@ public class ReadingMailActivity extends AppCompatActivity {
                 String str = params[0];
                 str = str.replaceAll("<","");
                 str = str.replaceAll(">","");
+                str = str.replaceAll("[\\t\\n\\r]"," ");
                 Log.e(TAG,str);
                 streamPlayer = new StreamPlayer();
                 streamQueue.add(streamPlayer);
@@ -595,6 +771,194 @@ public class ReadingMailActivity extends AppCompatActivity {
         }
     }
 
+    class FileWrite extends AsyncTask<Void, Void, Void> {
+
+        @Override
+        protected void onPreExecute()
+        {
+            textinMail = "";
+            FaceInMail = "";
+            isWaiting = false;
+            attributesinMail = "";
+            documentConversion = "";
+            isDoc = false;
+            isImage = false;
+        }
+        @Override
+        protected Void doInBackground(Void... voids) {
+
+            int index = (Configuration.currentPageNo-1)*5 + no-1;
+            try {
+                if (messagefinal[index].isMimeType("multipart/*")) {
+                    Multipart multipart = (Multipart) messagefinal[index].getContent();
+
+                    for (int x = 0; x < multipart.getCount(); x++) {
+                        BodyPart bodyPart = null;
+                        bodyPart = multipart.getBodyPart(x);
+                        if (!Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition()) &&
+                                !(StringUtils.isNotBlank(bodyPart.getFileName())))
+                        {
+                            continue; // dealing with attachments only
+                        }
+                        File mediaDir = new File("/storage/emulated/0","WatsonMail");
+                        if (!mediaDir.exists()){
+                            boolean success = mediaDir.mkdirs();
+                        }
+                        InputStream is = bodyPart.getInputStream();
+                        File f = new File("/storage/emulated/0/WatsonMail/" , bodyPart.getFileName());
+                        FileOutputStream fos = new FileOutputStream(f);
+
+                        byte[] buf = new byte[4096];
+                        int bytesRead;
+                        while((bytesRead = is.read(buf))!=-1) {
+                            fos.write(buf, 0, bytesRead);
+                            Log.e(TAG,buf.toString());
+                        }
+                        Log.e(TAG,"After writing");
+                        fos.flush();
+                        fos.close();
+                        String str= bodyPart.getFileName();
+                        if(str.contains(".jpg") || str.contains(".png"))
+                        {
+                            isImage = true;
+                            VisualRecognition service = new VisualRecognition(VisualRecognition.VERSION_DATE_2016_05_20);
+                            service.setApiKey("286208e205e80201e79fcd72cb0778e7f9d7b1bf");
+                            ClassifyImagesOptions options = new ClassifyImagesOptions.Builder()
+                                    .images(f)
+                                    .build();
+                            VisualClassification result = service.classify(options).execute();
+
+                            VisualRecognitionOptions now = new VisualRecognitionOptions.Builder().images(f).build();
+                            RecognizedText text = service.recognizeText(now).execute();
+                            DetectedFaces d = service.detectFaces(now).execute();
+                            /*******************TEXT DETECTION START****************************/
+                            Log.e(TAG,"The text in the image is " + text.toString());
+                            List<ImageText> tempList = text.getImages();
+                            ImageText im = (ImageText) tempList.get(0);
+                            String strt=im.getText();
+                            if(strt.equals(""))
+                            {
+                                Log.e(TAG,"null");
+                            }
+                            else
+                            {
+                                Log.e(TAG,"The text in the image is " + strt);
+                                textinMail = "The text in the image is " + strt;
+                            }
+
+                            /*******************TEXT DETECTION END****************************/
+
+                            /*******************FACE DETECTION START****************************/
+                            Log.e(TAG,"The face detected is of " + d.toString());
+                            List<ImageFace> tempFace = d.getImages();
+                            ImageFace i = (ImageFace) tempFace.get(0);
+                            List<Face> fff = i.getFaces();
+                            Iterator<Face> mm = fff.iterator();
+                            while(mm.hasNext())
+                            {
+                                Face fgf = (Face) mm.next();
+                                try {
+                                    Log.e(TAG, " The image consists face probably of " + fgf.getIdentity().getName().toString());
+                                    FaceInMail = FaceInMail + " The image consists face probably of " + fgf.getIdentity().getName().toString() + ".";
+                                }catch (Exception e)
+                                {
+                                    e.printStackTrace();
+                                }
+                            }
+                            Log.e(TAG,FaceInMail);
+
+                            /*******************FACE DETECTION END****************************/
+
+                            List<ImageClassification> k = result.getImages();
+                            List<VisualClassifier> gh = k.get(0).getClassifiers();
+                            Iterator<VisualClassifier> mmm = gh.iterator();
+                            while(mmm.hasNext())
+                            {
+                                VisualClassifier vf = mmm.next();
+                                List<VisualClassifier.VisualClass> hm = vf.getClasses();
+                                Iterator<VisualClassifier.VisualClass> a1 = hm.iterator();
+                                while(a1.hasNext())
+                                {
+                                    VisualClassifier.VisualClass b1 = a1.next();
+                                    try{
+                                        Log.e(TAG,"The image can consist of " + b1.getName() + " and its probability is " + b1.getScore().toString());
+                                        attributesinMail = attributesinMail + "The image can consist of " + b1.getName() + " and its probability is " + b1.getScore().toString() + ". ";
+                                    }catch (Exception e)
+                                    {
+                                        e.printStackTrace();
+                                    }
+
+                                }
+                            }
+                            Log.e(TAG,attributesinMail);
+
+                        }
+                        else if(str.contains(".pdf") || str.contains(".doc") || str.contains(".html"))
+                        {
+                            isDoc = true;
+                            Log.e(TAG,"/storage/emulated/0/WatsonMail/" +bodyPart.getFileName());
+                            DocumentConversion service = new DocumentConversion("2015-12-01");
+                            service.setUsernameAndPassword("a008c64d-eba7-4339-9a20-e13c556ca90e", "qdt620qMIKfR");
+                            File f1 = new File("/storage/emulated/0/WatsonMail/",bodyPart.getFileName());
+                            String extension = MimeTypeMap.getFileExtensionFromUrl("/storage/emulated/0/WatsonMail/" +bodyPart.getFileName());
+                            String h = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+                            Log.e(TAG,h);
+                            String htmlToAnswers = service.convertDocumentToText(f1,h).execute();
+                            //service.convertDocumentToText(f);
+                            documentConversion = htmlToAnswers;
+                            Log.e(TAG,htmlToAnswers);
+                        }
+                        else if(str.contains(".txt"))
+                        {
+                            isDoc = true;
+                            FileReader read=new FileReader("/storage/emulated/0/WatsonMail/" +bodyPart.getFileName());
+                            BufferedReader in=new BufferedReader(read);
+                            String n="";
+                            while((n=in.readLine())!=null)
+                            {
+                                documentConversion = documentConversion + n;
+                            }
+                            Log.e(TAG,documentConversion);
+                        }
+                        else
+                        {
+                            Log.e(TAG,"Unrecognized format! Cannot read");
+                        }
+                        Log.e(TAG,Boolean.toString(isWaiting));
+                        isWaiting = true;
+                        Log.e(TAG,"closing");
+                        Log.e(TAG,Boolean.toString(isWaiting));
+                        attachments.add(f);
+                    }
+                }
+            }
+            catch (Exception e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void aVoid) {
+            super.onPostExecute(aVoid);
+            isWaiting = true;
+            Log.e("in thread post","chavhc");
+        }
+    }
+
+
+
+
 }
+
+
+
+
+
+
+
+
+
+
 
 

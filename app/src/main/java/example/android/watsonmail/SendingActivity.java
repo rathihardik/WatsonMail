@@ -75,10 +75,15 @@ public class SendingActivity extends AppCompatActivity {
         Bundle recieved = getIntent().getExtras();
         if(recieved!=null)
         {
+
             String checkforward = recieved.getString("forward","itIsNotforward");
             String checkReply = recieved.getString("reply","itIsNotReply");
             if(!checkforward.equals("itIsNotforward"))
             {
+                varSpeak = new Speak();
+                varSpeak.execute("Now please enter the email address to whom you want to send the mail");
+                taskQueue.add(varSpeak);
+
                 String content = recieved.getString("message");
                 setMessage(content);
                 String subject = recieved.getString("subject");
@@ -100,6 +105,9 @@ public class SendingActivity extends AppCompatActivity {
                 isNormal = false;
             }
             else {
+                varSpeak = new Speak();
+                varSpeak.execute("Now please enter the email address to whom you want to send the mail");
+                taskQueue.add(varSpeak);
                 setTo("");
                 setSubject("");
                 setMessage("");
@@ -107,6 +115,9 @@ public class SendingActivity extends AppCompatActivity {
         }
         else
         {
+            varSpeak = new Speak();
+            varSpeak.execute("Now please enter the email address to whom you want to send the mail");
+            taskQueue.add(varSpeak);
             setTo("");
             setSubject("");
             setMessage("");
@@ -148,15 +159,19 @@ public class SendingActivity extends AppCompatActivity {
     public void layoutClicked(View view)
     {
         Log.e(TAG,"Layout is Clicked");
+        while (streamQueue.isEmpty()!=true)
+        {
+            StreamPlayer sm = streamQueue.poll();
+            sm.interrupt();
+        }
         while(taskQueue.isEmpty()!=true)
         {
             AsyncTask s = taskQueue.poll();
             s.cancel(true);
-            StreamPlayer sm = streamQueue.poll();
-            sm.interrupt();;
         }
         listen();
     }
+
 
     private void listen(){
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
@@ -295,7 +310,12 @@ public class SendingActivity extends AppCompatActivity {
                             }
                             else
                             {
-                                numberOfClicks =  3;
+                                numberOfClicks = 3;
+                                varSpeak = new Speak();
+                                varSpeak.execute("Please Confirm the mail. To : " + stringTo + ". Subject : " + stringSubject + ". Message : " + stringMessage + ". Speak Yes to confirm");
+                                taskQueue.add(varSpeak);
+                                numberOfClicks++;
+                                break;
                             }
                             break;
                         case 2:
