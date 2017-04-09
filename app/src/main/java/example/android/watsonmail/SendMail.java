@@ -3,7 +3,6 @@ package example.android.watsonmail;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.os.AsyncTask;
-import android.widget.Toast;
 
 import java.util.Properties;
 
@@ -35,14 +34,14 @@ public class SendMail extends AsyncTask<Void,Void,Void> {
     @Override
     protected void onPreExecute() {
         super.onPreExecute();
-        progressDialog = ProgressDialog.show(context,"Sending message","Please wait...",false,false);
+       // progressDialog = ProgressDialog.show(context,"Sending message","Please wait...",false,false);
 
     }
 
     @Override
     protected void onPostExecute(Void aVoid) {
         super.onPostExecute(aVoid);
-        progressDialog.dismiss();
+        //progressDialog.dismiss();
     }
 
     @Override
@@ -68,7 +67,6 @@ public class SendMail extends AsyncTask<Void,Void,Void> {
             mm.setText(message);
             Transport.send(mm);
             Configuration.messageSent = 1;
-            Toast.makeText(context,"Message Sent",Toast.LENGTH_LONG).show();
 
         } catch (MessagingException e) {
             e.printStackTrace();

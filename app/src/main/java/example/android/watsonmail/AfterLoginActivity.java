@@ -99,15 +99,20 @@ public class AfterLoginActivity extends AppCompatActivity {
     public void layoutClicked(View view)
     {
         Log.e(TAG,"Layout is Clicked");
+        while (streamQueue.isEmpty()!=true)
+        {
+            StreamPlayer sm = streamQueue.poll();
+            sm.interrupt();
+        }
         while(taskQueue.isEmpty()!=true)
         {
             AsyncTask s = taskQueue.poll();
             s.cancel(true);
-            StreamPlayer sm = streamQueue.poll();
-            sm.interrupt();;
+
         }
         listen();
     }
+
 
     private void listen(){
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
